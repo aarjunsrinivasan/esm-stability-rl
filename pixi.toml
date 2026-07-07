@@ -1,0 +1,33 @@
+[workspace]
+name = "esm-stability-rl"
+description = "RL alignment of ESM-C on protein folding stability (DPO vs GRPO)"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+# Base tools come from conda-forge; the ML stack comes from PyPI so we get the
+# CUDA torch wheel on linux-64 and the MPS wheel on osx-arm64 automatically.
+[dependencies]
+python = "3.12.*"
+pip = "*"
+
+[pypi-dependencies]
+torch = ">=2.4"                 # SDPA FlashAttention-2 backend on Ampere+ (bf16/fp16)
+transformers = ">=4.57"        # mainline ESM-C support (biohub/ESMC-300M, AutoModelForMaskedLM)
+accelerate = "*"               # device placement / dtype="auto"
+scikit-learn = "*"             # RidgeCV probe
+scipy = "*"                    # spearmanr / pearsonr
+numpy = ">=1.26,<2.0"
+pandas = "*"
+tqdm = "*"
+matplotlib = "*"
+requests = "*"                 # download_tsuboyama.py
+ipykernel = "*"                # tsuboyama_dataset.ipynb
+jupyter = "*"
+
+[tasks]
+# reward oracle (step 1) — the gate before any alignment
+probe = "python reward/fit_probe.py"
+probe-600m = "python reward/fit_probe.py --model biohub/ESMC-600M"
+# data
+download = "python download_tsuboyama.py --match Processed_K50_dG_datasets"
+lab = "jupyter lab"
