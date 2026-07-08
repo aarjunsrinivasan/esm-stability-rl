@@ -11,9 +11,10 @@ python = "3.12.*"
 pip = "*"
 
 [pypi-dependencies]
-torch = ">=2.4"                 # SDPA FlashAttention-2 backend on Ampere+ (bf16/fp16)
-transformers = ">=4.57"        # mainline ESM-C support (biohub/ESMC-300M, AutoModelForMaskedLM)
-accelerate = "*"               # device placement / dtype="auto"
+torch = ">=2.6,<3"             # SDPA FlashAttention-2 backend on Ampere+ (bf16/fp16)
+transformers = { git = "https://github.com/Biohub/transformers.git", rev = "main" }  # ESM-C support isn't in stock PyPI transformers yet
+accelerate = ">=1.13,<2"      # device placement / dtype="auto"
+peft = ">=0.19"                # LoRA adapters for the DPO/GRPO policy
 scikit-learn = "*"             # RidgeCV probe
 scipy = "*"                    # spearmanr / pearsonr
 numpy = ">=1.26,<2.0"
@@ -21,13 +22,8 @@ pandas = "*"
 tqdm = "*"
 matplotlib = "*"
 requests = "*"                 # download_tsuboyama.py
-ipykernel = "*"                # tsuboyama_dataset.ipynb
-jupyter = "*"
+ipykernel = "*"                # notebooks/
+ipywidgets = "*"               # interactive widgets in notebooks
+jupyterlab = "*"               # notebook UI
 
-[tasks]
-# reward oracle (step 1) — the gate before any alignment
-probe = "python reward/fit_probe.py"
-probe-600m = "python reward/fit_probe.py --model biohub/ESMC-600M"
-# data
-download = "python download_tsuboyama.py --match Processed_K50_dG_datasets"
-lab = "jupyter lab"
+# No [tasks] — run scripts explicitly with `pixi run python <script>` (see README).

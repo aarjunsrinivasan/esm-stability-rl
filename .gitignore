@@ -1,8 +1,11 @@
 # data downloads, prepared tables, and cached embeddings (regenerate locally)
 data/**
+!data/*.py
 
 # probe outputs (metrics kept in README; large pred CSVs regenerated)
 reward/probe_out/**
+
+docs/**
 
 # pixi env + python caches
 .pixi/
