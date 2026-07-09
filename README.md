@@ -21,90 +21,53 @@ experimental data (Tsuboyama 2023 mega-scale ΔG, held-out de novo domains + Pro
 
 | Step | What | State |
 |---|---|---|
-| **0. Data prep** | Tsuboyama 2023 → reward table, DPO pairs, leakage-free split | ✅ done |
-| **1. Reward oracle (gate)** | ridge probe on frozen ESM-C → ΔG; held-out Spearman | ✅ done — **passes** |
-| **2. DPO arm** | custom pseudo-LL DPO on preference pairs (offline), LoRA | ✅ built |
+| 0. Data prep | Tsuboyama 2023 → reward table, DPO pairs, leakage-free split | ✅ done |
+| 1. Reward oracle (gate) | ridge probe on frozen ESM-C → ΔG; held-out Spearman ≥ 0.40 | ✅ **passes** (0.518) |
+| 2. DPO arm | custom pseudo-LL DPO on preference pairs (offline), LoRA | ✅ built, smoke-tested |
 | 3. GRPO arm | GRPO on the probe reward (online) | ⬜ next |
 | 4. Comparison + hacking analysis | every held-out metric, KL sweep, ProteinGym | ⬜ |
 
-### Step 1 result — the reward oracle passes the gate
-
-The ESM3 paper (App. A.1.4.4) shows Megascale is *not* ESM pretraining data, and a linear
-probe on frozen ESM-C reps already predicts ΔG at Spearman ~0.68–0.8. So the reward is a
-cheap, solved component — the gate is: **held-out Spearman ≥ 0.40 before touching RL.**
-
-Fit on **natural** domains, evaluated on **de novo** domains (topology-code clusters like
-`EEHH`/`HHH` — not in ESM/ESMFold pretraining, so leakage-free):
+**Reward probe** (`biohub/ESMC-300M`, penultimate layer, mean-pooled; fit on natural
+domains, evaluated on de novo — leakage-free since ESM/ESMFold never trained on them):
 
 | split | Spearman | Pearson | RMSE | n |
 |---|---|---|---|---|
 | train (natural) | 0.855 | 0.845 | 0.93 | 30,000 |
-| **held-out de novo** | **0.518** | 0.532 | 1.98 | 40,000 |
+| held-out de novo | **0.518** | 0.532 | 1.98 | 40,000 |
 
-→ **PASS.** `biohub/ESMC-300M`, penultimate layer, mean-pooled. Below the paper's 0.68–0.8
-because that's the 6B model — model *size* is the lever, not the probe. Run the 600M model
-(`pixi run probe-600m`) for a boost.
+Below the ESM3 paper's reported 0.68–0.8 because that's their 6B model — size is the lever,
+not the probe. Try `--model biohub/ESMC-600M` for a boost.
 
-### Step 2 — DPO (offline arm)
-
-ESM-C is a **masked / bidirectional** LM, so `log π(seq) = Σ log p(x_i | x_<i)` doesn't
-apply and TRL's causal-LM `DPOTrainer` doesn't fit. [align/train_dpo.py](align/train_dpo.py)
-is a **custom DPO loop** that defines the sequence log-prob as the single-pass
-**pseudo-log-likelihood** (`Σ_i log softmax(logits)[i, x_i]` over residues, one forward
-pass) — the standard differentiable MLM fitness proxy. Policy = ESM-C + **LoRA** (peft);
-reference = the same base weights with adapters disabled.
-
-**Splits — group-disjoint by `WT_name`, no domain in two splits:**
-
-| split | source | role |
-|---|---|---|
-| train pairs | ~90% of the 331 **natural** domains (`dpo_pairs.csv`) | DPO optimization |
-| val pairs | the other ~10% of natural domains | in-training metrics |
-| **test** | the 148 **de novo** domains (`reward_table.csv`) | leakage-free eval |
-
-**In-training validation** (logged every `--eval-steps`): `reward_acc` (fraction of val
-pairs ordered correctly, → 1.0), `reward_margin` (mean `β·(Δchosen − Δrejected)`, ↑),
-`val_loss`, and `kl_drift` (`mean(log π − log π_ref)`, watch it doesn't blow up).
-**The real test** (`--heldout-eval`): Spearman of the policy's Δ-pseudo-LL vs *true ΔG* on
-the de novo folds — does alignment improve stability ranking on domains never trained on,
-vs the base model? Same held-out set as the reward probe.
-
-**On masking.** The train *and* val DPO loss use the **single-pass** pseudo-LL — no
-position is masked; each `log p(x_i | context)` is read from one unmasked forward pass. This
-has a self-leakage bias (the true token is visible), but it's identical for `log π` and
-`log π_ref`, so it **cancels in the DPO margin** `(log π − log π_ref)`, and keeping val
-scoring identical to train is what makes `val_loss`/`reward_acc` comparable. For the *held-
-out de novo* test only, `--mask-scoring` switches to the rigorous **masked** pseudo-LL (mask
-each residue once, L forward passes/seq, no leakage) — accurate but slow, so pair it with a
-large `--eval-steps`.
-
-Smoke run confirms the mechanics (val_loss ↓, reward_margin ↑, reward_acc ~0.78, kl_drift
-climbing). A full run is the next thing to sweep (β, LR, epochs).
+**DPO arm** — ESM-C is masked/bidirectional, so TRL's causal-LM `DPOTrainer` doesn't apply.
+[`align/train_dpo.py`](align/train_dpo.py) is a custom loop scoring sequences by single-pass
+pseudo-log-likelihood, policy = ESM-C + LoRA, reference = same weights with adapters
+disabled. Full method, split design, and metric definitions are in the script's docstring.
+Smoke run confirms the mechanics (val_loss ↓, reward_acc → 0.78). Full sweep (β, LR, epochs)
+is next.
 
 ---
 
 ## Setup
 
-Self-contained [pixi](https://pixi.sh) environment — no dependency on the parent ESM repo.
-On `linux-64` you get the CUDA torch wheel; on `osx-arm64` the MPS wheel.
+Self-contained [pixi](https://pixi.sh) environment.
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | bash        # if you don't have pixi
-cd rl_esm
-pixi install                                         # resolves the env from pixi.toml
+cd rl_esm && pixi install
 ```
 
-ESM-C weights are pulled from the 🤗 Hub on first use (`biohub/ESMC-300M`, ~1 GB) — no
-manual download. Optional speed/precision kernels (`xformers`, `flash-attn`,
-`transformer_engine`) are **not** required; the code falls back to torch SDPA. They make no
-difference to the probe (see note at the bottom).
+ESM-C weights pull from the 🤗 Hub on first use (`biohub/ESMC-300M`, ~1 GB). Transformers is
+pinned to a Biohub fork (`pixi.toml`) since ESM-C support isn't in stock PyPI transformers
+yet. Optional fused kernels (`xformers`, `flash-attn`, `transformer_engine`) are **not
+required** — the code falls back to torch SDPA, and for this sequence length/volume the
+speed difference is seconds. Only bother if you scale up embedding volume a lot.
 
 <details><summary>pip alternative (no pixi)</summary>
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install "torch>=2.4" "transformers>=4.57" accelerate "peft>=0.15" \
-            scikit-learn scipy "numpy<2" pandas tqdm matplotlib requests jupyter
+pip install "torch>=2.6" "transformers @ git+https://github.com/Biohub/transformers.git@main" \
+            accelerate "peft>=0.19" scikit-learn scipy "numpy<2" pandas tqdm matplotlib requests jupyter
 ```
 </details>
 
@@ -112,81 +75,74 @@ pip install "torch>=2.4" "transformers>=4.57" accelerate "peft>=0.15" \
 
 ## Reproduce
 
-### 1. Download the Tsuboyama data (~1 GB)
-
 All commands run inside the pixi env — prefix with `pixi run` (or `pixi shell` once, then
 drop the prefix).
 
+**1. Download Tsuboyama data (~1 GB)**
+
 ```bash
-pixi run python data/download.py --dataset tsuboyama --match Processed_K50_dG_datasets   # Zenodo 7992926, resumable + md5-verified
+pixi run python data/download.py --dataset tsuboyama --match Processed_K50_dG_datasets   # Zenodo 7992926
 unzip -o data/tsuboyama/Processed_K50_dG_datasets.zip -d data/tsuboyama/
-mv data/tsuboyama/Processed_K50_dG_datasets/* data/tsuboyama/   # zip nests one level — flatten
-rm -rf data/tsuboyama/Processed_K50_dG_datasets
-find data/tsuboyama -type d -name '__MACOSX' -exec rm -rf {} + 2>/dev/null || true
+mv data/tsuboyama/Processed_K50_dG_datasets/* data/tsuboyama/ && rm -rf data/tsuboyama/Processed_K50_dG_datasets
 ```
 
-Source of truth: `Tsuboyama2023_Dataset2_Dataset3_20230416.csv` (776k rows, the ML table
-with `aa_seq` + ΔG). `Dataset1` is DNA-only — skipped.
-
-### 2. Build the training inputs
+**2. Build training inputs**
 
 ```bash
 pixi run python data/prepare.py --dataset tsuboyama
 ```
 
-Produces `data/prepared/`:
+Produces `data/prepared/`: `reward_table.csv` (771,761 rows, `aa_seq → dG`), `dpo_pairs.csv`
+(66,012 preference pairs, ΔG-margin ≥ 1 kcal/mol), `wt_split.csv` (479 WT domains: 331
+natural + 148 de novo, held out). Details (censored ΔG parsing, split logic) in the script.
 
-| file | rows | contents |
-|---|---|---|
-| `reward_table.csv` | 771,761 | `aa_seq → dG` (+ `ddG`, origin, WT) — reward-probe training set |
-| `dpo_pairs.csv` | 66,012 | `(chosen, rejected)` per natural WT, ΔG-margin ≥ 1 kcal/mol |
-| `wt_split.csv` | 479 | per-WT `train_natural` / `heldout_denovo` assignment |
+**2b. Structural (Foldseek) split — stricter, optional**
 
-Key data facts: 479 WT domains = **331 natural + 148 de novo** (split on `WT_cluster`:
-numeric = natural, topology code = de novo). ΔG label is **censored** at `<-1` / `>5` →
-parsed to bounds (naive `float()` silently drops ~100k rows). Sequences 31–75 aa (cheap for
-ESMFold later). De novo domains are held out; reward + pairs built from natural only.
+`wt_split.csv` splits on natural-vs-de-novo origin; `data/foldseek_split.py` instead
+replicates the ESM3 paper's method (App. A.1.4.4, [`docs/esm3.txt`](docs/esm3.txt)) —
+clusters domains structurally with Foldseek so no near-identical structure spans
+train/eval, optionally stratified by pseudoperplexity. Rationale and exact deviations from
+the paper are in the script's docstring.
 
-### 3. Fit the reward probe (the gate)
+```bash
+pixi run python data/download.py --dataset tsuboyama --match AlphaFold_model_PDBs   # structures
+pixi run python data/foldseek_split.py                      # stage 1: structural split
+pixi run python data/foldseek_split.py --stratify-pppl       # + stage 2: pppl-balanced val/test
+```
+
+Output: `data/prepared/wt_split_foldseek.csv` — 479 domains → 118 structural clusters → 54
+train / 12 val / 52 test / 361 excluded (same order of magnitude as the paper's 47/13/50).
+Swap this in wherever leakage-free eval matters, at the cost of a much smaller train pool.
+`foldseek` installs automatically via `pixi install` (bioconda channel).
+
+**3. Fit the reward probe (the gate)**
 
 ```bash
 pixi run python reward/fit_probe.py                              # 20k natural train / all de novo held-out
-# or tune it:
 pixi run python reward/fit_probe.py --model biohub/ESMC-600M --layer -2
-pixi run python reward/fit_probe.py --n-train 40000 --n-eval 20000
-pixi run python reward/fit_probe.py --no-cache                   # force re-embed
+pixi run python reward/fit_probe.py --no-cache                    # force re-embed
 ```
 
-Embeddings are mean-pooled ESM-C hidden states at the chosen layer (penultimate by
-default), cached to `data/prepared/embeddings/*.npz` keyed by (model, layer, sequence set),
-so re-runs are instant. Outputs land in `reward/probe_out/` (metrics + held-out predictions).
+Embeddings cache to `data/prepared/embeddings/*.npz`, so re-runs are instant. Outputs land
+in `reward/probe_out/`.
 
-### 4. DPO alignment (offline arm)
+**4. DPO alignment (offline arm)**
 
 ```bash
-# quick sanity check (200 pairs, ~6 steps)
-pixi run python align/train_dpo.py --smoke --heldout-eval --heldout-n 300
+pixi run python align/train_dpo.py --smoke --heldout-eval --heldout-n 300   # sanity check
 
-# ── full run: all 66k pairs, 1 epoch, de novo ΔG eval every 200 steps ──
 pixi run python align/train_dpo.py \
     --epochs 1 --batch-size 16 --beta 0.1 --lr 1e-4 \
-    --eval-steps 200 --heldout-eval --heldout-n 3000
-
-# same, but score the de novo eval with rigorous masked pseudo-LL (slower — keep eval-steps high)
-pixi run python align/train_dpo.py \
-    --epochs 1 --batch-size 16 --beta 0.1 --eval-steps 500 \
-    --heldout-eval --heldout-n 1500 --mask-scoring
+    --eval-steps 200 --heldout-eval --heldout-n 3000                        # full run, 66k pairs
 ```
 
 `--beta` is the main knob (KL strength: lower = more drift, higher reward-hacking risk).
+Saves LoRA adapters to `align/dpo_out/{best,last}` and metrics to
+`align/dpo_out/history.json`.
 
-Saves LoRA adapters to `align/dpo_out/{best,last}` and per-eval metrics to
-`align/dpo_out/history.json`. See the "Step 2 — DPO" section above for the split design
-and what each metric means.
-
-**Analysis:** [notebooks/analyze_dpo.ipynb](notebooks/analyze_dpo.ipynb) reads `history.json` and
-plots before-vs-after — training curves, the de novo test Spearman (base vs policy), the
-likelihood-displacement decomposition, and a reloaded-model pseudo-LL-vs-ΔG scatter.
+**Analysis:** [`notebooks/analyze_dpo.ipynb`](notebooks/analyze_dpo.ipynb) reads
+`history.json` and plots training curves, de novo Spearman (base vs. policy), and the
+likelihood-displacement decomposition.
 
 ```bash
 pixi run jupyter lab        # open notebooks/analyze_dpo.ipynb
@@ -203,29 +159,18 @@ esm-stability-rl/
 ├── docs/
 │   └── project_outline_dev.md    # full design: DPO-vs-GRPO, reward hacking, eval strategy
 ├── data/
-│   ├── download.py               # Zenodo downloader — python data/download.py --dataset <name>
-│   └── prepare.py                # data prep → data/prepared/ — python data/prepare.py --dataset <name>
+│   ├── download.py               # Zenodo downloader
+│   ├── prepare.py                # → data/prepared/{reward_table,dpo_pairs,wt_split}.csv
+│   └── foldseek_split.py         # ESM3-paper-style structural split
 ├── reward/
 │   └── fit_probe.py              # ✅ ridge probe on frozen ESM-C → ΔG (the gate)
 ├── align/
 │   ├── train_dpo.py              # ✅ custom pseudo-LL DPO on preference pairs (offline)
-│                                 # ⬜ train_grpo.py (online arm)
+│                                  # ⬜ train_grpo.py (online arm)
 ├── notebooks/
-│   ├── tsuboyama_eda.ipynb       # ✅ dataset schema exploration + EDA
-│   └── analyze_dpo.ipynb         # ✅ DPO before/after + metric analysis
+│   ├── tsuboyama_eda.ipynb       # dataset schema exploration + EDA
+│   └── analyze_dpo.ipynb         # DPO before/after + metric analysis
 └── analysis/                     # ⬜ compare.py, hacking_report.py, kl_sweep.py, validate_proteingym.py
 ```
 
 `data/`, `reward/probe_out/`, and `.pixi/` are git-ignored — regenerate them locally.
-
----
-
-## Notes
-
-**On the "install xformers / flash-attn" warnings from ESM-C.** These are optional fused
-kernels ESM-C *prefers*; it falls back to torch's `F.scaled_dot_product_attention` (which
-carries a bundled FlashAttention-2 backend on Ampere+ **in fp16/bf16**). The default load is
-fp32, so no fused attention runs — but for 40–75 aa sequences embedded once and cached, the
-speed difference is seconds and the numeric drift is on the residual stream the ridge probe
-refits over anyway. Not worth installing. Load in bf16 (or `pip install xformers`) only if
-you later scale up embedding volume.

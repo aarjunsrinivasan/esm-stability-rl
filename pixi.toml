@@ -1,7 +1,7 @@
 [workspace]
 name = "esm-stability-rl"
 description = "RL alignment of ESM-C on protein folding stability (DPO vs GRPO)"
-channels = ["conda-forge"]
+channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64", "osx-arm64"]
 
 # Base tools come from conda-forge; the ML stack comes from PyPI so we get the
@@ -9,6 +9,7 @@ platforms = ["linux-64", "osx-arm64"]
 [dependencies]
 python = "3.12.*"
 pip = "*"
+foldseek = "*"                 # structural clustering for the ESM3-style stability split (data/foldseek_split.py)
 
 [pypi-dependencies]
 torch = ">=2.6,<3"             # SDPA FlashAttention-2 backend on Ampere+ (bf16/fp16)
