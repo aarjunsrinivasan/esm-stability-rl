@@ -26,5 +26,9 @@ requests = "*"                 # download_tsuboyama.py
 ipykernel = "*"                # notebooks/
 ipywidgets = "*"               # interactive widgets in notebooks
 jupyterlab = "*"               # notebook UI
+pyyaml = "*"                   # align/configs/*.yaml
+tensorboard = "*"              # align/dpo_out/runs/*/tensorboard
+optuna = ">=4.0"                # align/sweep_dpo.py hyperparameter search
+pytest = "*"                    # lightweight unit tests for data prep invariants
 
 # No [tasks] — run scripts explicitly with `pixi run python <script>` (see README).
