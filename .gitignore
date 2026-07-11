@@ -4,8 +4,9 @@ data/**
 
 # probe outputs (metrics kept in README; large pred CSVs regenerated)
 reward/probe_out/**
-
+align/dpo_out/**
 docs/**
+.pytest_cache
 
 # pixi env + python caches
 .pixi/
