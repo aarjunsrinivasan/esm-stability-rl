@@ -1,0 +1,33 @@
+# Default hyperparameters for align/train_dpo.py — one YAML source of truth instead
+# of scattered CLI defaults. Keys are the argparse *dest* names (underscores, not
+# hyphens). Load with:
+#
+#   pixi run python align/train_dpo.py --config align/configs/base.yaml
+#
+# Any flag also passed on the CLI overrides the value here, e.g.:
+#
+#   pixi run python align/train_dpo.py --config align/configs/base.yaml --lr 3e-4 --beta 0.2
+
+model: biohub/ESMC-300M
+beta: 0.1               # DPO temperature — the main knob (KL strength / reward-hacking risk)
+epochs: 1
+batch_size: 16           # pairs per step
+lr: 1.0e-4
+grad_clip: 1.0
+val_frac: 0.1            # ignored if train_pairs/val_pairs are set below
+
+# Recommended: structurally leakage-free split from data/build_dpo_pairs.py (README "2c").
+# Comment both out to fall back to a random val_frac carve of data/prepared/dpo_pairs.csv.
+train_pairs: data/prepared/dpo_pairs_train.csv
+val_pairs: data/prepared/dpo_pairs_val.csv
+
+eval_steps: 200
+length_norm: false
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.0        # must stay 0 with fused-param LoRA targets (ParamWrapper)
+max_pairs: 0              # 0 = all
+heldout_eval: true
+heldout_n: 3000
+mask_scoring: false
+seed: 0

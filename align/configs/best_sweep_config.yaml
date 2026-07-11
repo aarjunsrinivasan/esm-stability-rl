@@ -1,0 +1,23 @@
+# Winning hyperparams from align/sweep_dpo.py (study='sweep_20260710', trial #29, reward_acc=0.9089).
+# Full-data confirmatory run (overrides the sweep's shrunk max_pairs/heldout_eval):
+#   pixi run python align/train_dpo.py --config align/configs/best_sweep_config.yaml --max-pairs 0 --heldout-eval
+
+model: biohub/ESMC-300M
+train_pairs: data/prepared/dpo_pairs_train.csv
+val_pairs: data/prepared/dpo_pairs_val.csv
+epochs: 1
+eval_steps: 100
+max_pairs: 8000
+grad_clip: 1.0
+val_frac: 0.1
+length_norm: false
+lora_alpha: 16
+lora_dropout: 0.0
+heldout_eval: false
+heldout_n: 3000
+mask_scoring: false
+seed: 0
+beta: 0.027981561874632653
+lr: 0.00038886588803917243
+lora_rank: 32
+batch_size: 16

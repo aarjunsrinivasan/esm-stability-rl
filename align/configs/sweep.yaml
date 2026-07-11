@@ -1,0 +1,34 @@
+# Search space + fixed args for align/sweep_dpo.py (Optuna study over
+# align/train_dpo.py). `fixed` values map straight onto train_dpo.py's argparse dest
+# names (same as base.yaml). `search_space` entries are read by sweep_dpo.py only.
+#
+#   pixi run python align/sweep_dpo.py --config align/configs/sweep.yaml --n-trials 30
+#
+# Objective: best val reward_acc reached during each trial (fast, computed on every
+# run regardless of heldout_eval — see docs/notes.md + README for why reward_acc was
+# chosen over the de novo Spearman for the search loop). Once the study finishes, take
+# the winning config it writes to align/configs/best_sweep_config.yaml and run a full,
+# --heldout-eval confirmatory pass with train_dpo.py directly.
+
+fixed:
+  model: biohub/ESMC-300M
+  train_pairs: data/prepared/dpo_pairs_train.csv
+  val_pairs: data/prepared/dpo_pairs_val.csv
+  epochs: 1
+  eval_steps: 100
+  max_pairs: 8000          # shrink the train set so each trial is fast; raise for the final run
+  grad_clip: 1.0
+  val_frac: 0.1
+  length_norm: false
+  lora_alpha: 16
+  lora_dropout: 0.0
+  heldout_eval: false      # objective is reward_acc — skip the slower de novo eval during search
+  heldout_n: 3000
+  mask_scoring: false
+  seed: 0
+
+search_space:
+  beta:       {type: float,       low: 0.02, high: 0.5,  log: true}
+  lr:         {type: float,       low: 3.0e-5, high: 5.0e-4, log: true}
+  lora_rank:  {type: categorical, choices: [4, 8, 16, 32]}
+  batch_size: {type: categorical, choices: [8, 16, 32]}   # 64 → 128 seqs/fwd OOMs a 24GB card in fp32

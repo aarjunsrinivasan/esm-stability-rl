@@ -1,0 +1,22 @@
+# Corrected full-training config (see notebooks/dpo_results_analysis.ipynb §4).
+# Moderate beta + heldout_eval on; select the checkpoint by de novo Spearman, not reward_acc.
+#   pixi run python align/train_dpo.py --config align/configs/full_train_config.yaml --exp-name full_v1
+
+model: biohub/ESMC-300M
+train_pairs: data/prepared/dpo_pairs_train.csv
+val_pairs: data/prepared/dpo_pairs_val.csv
+epochs: 2
+batch_size: 16
+beta: 0.1
+lr: 0.0002
+lora_rank: 16
+lora_alpha: 16
+lora_dropout: 0.0
+grad_clip: 1.0
+max_pairs: 0
+eval_steps: 100
+heldout_eval: true
+heldout_n: 3000
+length_norm: false
+mask_scoring: false
+seed: 0

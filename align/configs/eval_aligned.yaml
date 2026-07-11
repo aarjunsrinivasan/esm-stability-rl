@@ -1,0 +1,29 @@
+# Aligned-policy evaluation config for align/eval_base.py — runs the SAME metrics
+# as eval_base.yaml but wraps the base ESM-C with a saved LoRA adapter, so the
+# output is apples-to-apples with the base run and you can read off base→aligned
+# deltas on pair accuracy, masked pseudo-LL and ΔΔG (not just the de novo Spearman
+# that train_dpo.py already logs). Keys are argparse *dest* names. Load with:
+#
+#   pixi run python align/eval_base.py --config align/configs/eval_aligned.yaml
+#
+# Point --adapter at the checkpoint you want to score (best/ selected by de novo
+# Spearman, or last/). Override on the CLI to score a different run without editing
+# this file, e.g.:
+#
+#   pixi run python align/eval_base.py --config align/configs/eval_aligned.yaml \
+#       --adapter align/dpo_out/runs/<exp>/<run>/last
+
+model: biohub/ESMC-300M
+
+# CHANGE ME to the run you want to evaluate. Must match the model/pairs the adapter
+# was trained on (same base model, same dpo_pairs_train/val split).
+adapter: align/dpo_out/runs/base_full_20260710/20260710_082958_b0.1_lr1e-04_bs16_r8/best
+
+# Keep these identical to eval_base.yaml so base vs aligned is a fair comparison.
+splits: [train, val, test]
+n_per_group: 5000        # cap sequences/pairs scored per split (single-pass); 0 = all
+mask_n: 1000             # cap per split for masked pseudo-LL (L× fwd passes); 0 = skip masked
+batch_size: 16
+length_norm: false       # must match the train_dpo.py run that produced the adapter
+no_pairs: false
+seed: 0                  # same seed as the base run → identical subsample → fair delta

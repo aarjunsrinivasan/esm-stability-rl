@@ -1,0 +1,24 @@
+# Base-model evaluation config for align/eval_base.py — how the base ESM-C
+# (no LoRA, no alignment) ranks folding stability, split-wise, as a before/after
+# reference row for the DPO run. Keys are the argparse *dest* names (underscores,
+# not hyphens). Load with:
+#
+#   pixi run python align/eval_base.py --config align/configs/eval_base.yaml
+#
+# Any flag also passed on the CLI overrides the value here, e.g.:
+#
+#   pixi run python align/eval_base.py --config align/configs/eval_base.yaml --mask-n 0
+
+model: biohub/ESMC-300M
+
+# Splits follow train_dpo.py exactly (NOT the foldseek split column):
+#   test = entire de novo set; train/val = natural domains in the two pair files.
+# Add 'unused' to also score natural domains in neither pair file.
+splits: [train, val, test]
+
+n_per_group: 5000        # cap sequences/pairs scored per split (single-pass); 0 = all
+mask_n: 1000             # cap per split for masked pseudo-LL (L× fwd passes); 0 = skip masked
+batch_size: 16
+length_norm: false       # match the train_dpo.py run you compare against
+no_pairs: false          # keep the pair-accuracy view on train/val
+seed: 0                  # fixes the random subsample → reproducible metrics
