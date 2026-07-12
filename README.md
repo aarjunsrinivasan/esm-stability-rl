@@ -1,49 +1,19 @@
-# esm-stability-rl — RL-aligning a protein language model on folding stability
+# esm-stability-rl — aligning a protein language model on folding stability
 
-Align **ESM-C** to a *measurable* fitness objective (protein folding stability, ΔG) two
-ways — **offline DPO vs. online GRPO** — and run an honest head-to-head: which optimizes
-better, which stays in-distribution, and which **reward-hacks**. Validated against real
-experimental data (Tsuboyama 2023 mega-scale ΔG, held-out de novo domains + ProteinGym).
-
-> The headline deliverable is **not** "reward went up" — it's the DPO-vs-GRPO comparison
-> plus a reward-hacking analysis, with held-out oracles and ground-truth validation.
-> Full design & rationale: [`docs/project_outline_dev.md`](docs/project_outline_dev.md).
+Align **ESM-C** to a measurable fitness objective — protein folding stability (ΔG) — with
+offline **DPO**, and validate against real experimental data (Tsuboyama 2023 mega-scale ΔG,
+held-out de novo domains, ProteinGym). Held-out oracles that appear in no reward signal
+(ESMFold pLDDT, base-model perplexity, ProteinGym) provide ground-truth checks.
 
 ```
-  OFFLINE:  Megascale ΔG ──▶ preference pairs (A≻B) ──▶ DPO  ──▶ aligned policy
-  ONLINE:   policy ──samples──▶ ridge-probe reward ──▶ GRPO (reward − β·KL) ──▶ policy
-  held-out checks (NOT in either reward):  ESMFold pLDDT · base-model perplexity · ProteinGym
+  Megascale ΔG ──▶ preference pairs (A≻B) ──▶ DPO ──▶ aligned policy
+  held-out checks (not in the reward):  ESMFold pLDDT · base-model perplexity · ProteinGym
 ```
 
----
-
-## Status
-
-| Step | What | State |
-|---|---|---|
-| 0. Data prep | Tsuboyama 2023 → reward table, DPO pairs, leakage-free split | ✅ done |
-| 1. Reward oracle (gate) | ridge probe on frozen ESM-C → ΔG; held-out Spearman ≥ 0.40 | ✅ **passes** (0.518) |
-| 2. DPO arm | custom pseudo-LL DPO on preference pairs (offline), LoRA | ✅ built, smoke-tested |
-| 3. GRPO arm | GRPO on the probe reward (online) | ⬜ next |
-| 4. Comparison + hacking analysis | every held-out metric, KL sweep, ProteinGym | ⬜ |
-
-**Reward probe** (`biohub/ESMC-300M`, penultimate layer, mean-pooled; fit on natural
-domains, evaluated on de novo — leakage-free since ESM/ESMFold never trained on them):
-
-| split | Spearman | Pearson | RMSE | n |
-|---|---|---|---|---|
-| train (natural) | 0.855 | 0.845 | 0.93 | 30,000 |
-| held-out de novo | **0.518** | 0.532 | 1.98 | 40,000 |
-
-Below the ESM3 paper's reported 0.68–0.8 because that's their 6B model — size is the lever,
-not the probe. Try `--model biohub/ESMC-600M` for a boost.
-
-**DPO arm** — ESM-C is masked/bidirectional, so TRL's causal-LM `DPOTrainer` doesn't apply.
-[`align/train_dpo.py`](align/train_dpo.py) is a custom loop scoring sequences by single-pass
-pseudo-log-likelihood, policy = ESM-C + LoRA, reference = same weights with adapters
-disabled. Full method, split design, and metric definitions are in the script's docstring.
-Smoke run confirms the mechanics (val_loss ↓, reward_acc → 0.78). Full sweep (β, LR, epochs)
-is next.
+The reward oracle is a ridge probe on frozen ESM-C (`biohub/ESMC-300M`, penultimate layer,
+mean-pooled) fit on natural domains and evaluated on de novo domains — leakage-free, since
+ESM/ESMFold never trained on de novo sequences. Full design and rationale live in
+[`docs/project_outline_dev.md`](docs/project_outline_dev.md).
 
 ---
 
@@ -56,13 +26,12 @@ curl -fsSL https://pixi.sh/install.sh | bash        # if you don't have pixi
 cd rl_esm && pixi install
 ```
 
+All commands below run inside the pixi env — prefix with `pixi run` (or run `pixi shell`
+once, then drop the prefix).
 
 ---
 
-## Reproduce
-
-All commands run inside the pixi env — prefix with `pixi run` (or `pixi shell` once, then
-drop the prefix).
+## Running the pipeline
 
 **1. Download Tsuboyama data (~1 GB)**
 
@@ -140,7 +109,7 @@ anything that needs the pretraining-leakage guarantee; only reach for the origin
 variants if that guarantee doesn't matter for what you're testing. `foldseek` installs
 automatically via `pixi install` (bioconda channel).
 
-**2c. Leakage-free DPO train/val pairs (recommended before step 4)**
+**2c. Leakage-free DPO train/val pairs (recommended before training)**
 
 `dpo_pairs.csv` (step 2) is built from all 331 natural domains; `align/train_dpo.py`'s
 `load_pairs()` then carves a random 10% of WT domains into val *at runtime*. That's
@@ -171,7 +140,13 @@ pixi run python reward/fit_probe.py --no-cache                    # force re-emb
 Embeddings cache to `data/prepared/embeddings/*.npz`, so re-runs are instant. Outputs land
 in `reward/probe_out/`.
 
-**4. DPO alignment (offline arm)**
+**4. DPO alignment**
+
+ESM-C is masked/bidirectional, so TRL's causal-LM `DPOTrainer` doesn't apply.
+[`align/train_dpo.py`](align/train_dpo.py) is a custom loop that scores sequences by
+single-pass pseudo-log-likelihood; the policy is ESM-C + LoRA and the reference is the same
+weights with adapters disabled. Full method, split design, and metric definitions are in the
+script's docstring.
 
 ```bash
 pixi run python align/train_dpo.py --smoke --heldout-eval --heldout-n 300   # sanity check
@@ -208,6 +183,3 @@ Persists to a local `align/dpo_out/optuna_study.db` (resumable — rerun with th
 `--study-name` to continue) and writes the winning hyperparams to
 `align/configs/best_sweep_config.yaml`, ready for a full-data confirmatory run:
 `train_dpo.py --config align/configs/best_sweep_config.yaml --max-pairs 0 --heldout-eval`.
-
-
----
