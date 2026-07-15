@@ -1,0 +1,19 @@
+# FireProt held-out evaluation for align/eval_fireprot.py — per-protein
+# Spearman(pseudo-LL, ddG) on the homolog-free FireProt set, base vs aligned.
+# Prepare the data first:  pixi run python data/download_fireprot.py
+# Run:  pixi run python align/eval_fireprot.py --config align/configs/eval_fireprot.yaml
+# Keys are argparse *dest* names; any CLI flag overrides the value here.
+
+model: biohub/ESMC-300M
+
+# CHANGE ME to the run you want to score. Scoring base + aligned together (adapters
+# disabled = base) makes every per-protein delta apples-to-apples.
+adapter: align/dpo_out/runs/base_full_20260710/20260710_082958_b0.1_lr1e-04_bs16_r8/best
+
+min_muts: 10             # skip proteins with fewer mutants (per-protein ρ needs points)
+max_proteins: 0          # 0 = all qualifying proteins
+mask_n_proteins: 10      # also masked-score the 10 largest proteins (0 = skip masked)
+mask_per_protein: 40     # cap mutants scored masked per protein (keeps L× passes tractable)
+batch_size: 16
+length_norm: false       # must match the train_dpo.py run that produced the adapter
+seed: 0

@@ -2,18 +2,16 @@
 
 Align **ESM-C** to a measurable fitness objective — protein folding stability (ΔG) — with
 offline **DPO**, and validate against real experimental data (Tsuboyama 2023 mega-scale ΔG,
-held-out de novo domains, ProteinGym). Held-out oracles that appear in no reward signal
-(ESMFold pLDDT, base-model perplexity, ProteinGym) provide ground-truth checks.
+held-out de novo domains, held-out **FireProt ΔΔG**, ProteinGym). Held-out oracles that
+appear in no reward signal (FireProt ΔΔG, ESMFold pLDDT, base-model perplexity, ProteinGym)
+provide ground-truth checks.
 
 ```
   Megascale ΔG ──▶ preference pairs (A≻B) ──▶ DPO ──▶ aligned policy
-  held-out checks (not in the reward):  ESMFold pLDDT · base-model perplexity · ProteinGym
+  held-out checks (not in the reward):  FireProt ΔΔG · ESMFold pLDDT · base-model perplexity · ProteinGym
 ```
 
-The reward oracle is a ridge probe on frozen ESM-C (`biohub/ESMC-300M`, penultimate layer,
-mean-pooled) fit on natural domains and evaluated on de novo domains — leakage-free, since
-ESM/ESMFold never trained on de novo sequences. Full design and rationale live in
-[`docs/project_outline_dev.md`](docs/project_outline_dev.md).
+
 
 ---
 
@@ -183,3 +181,68 @@ Persists to a local `align/dpo_out/optuna_study.db` (resumable — rerun with th
 `--study-name` to continue) and writes the winning hyperparams to
 `align/configs/best_sweep_config.yaml`, ready for a full-data confirmatory run:
 `train_dpo.py --config align/configs/best_sweep_config.yaml --max-pairs 0 --heldout-eval`.
+
+**5. Held-out FireProt ΔΔG evaluation (the cleanest generalization check)**
+
+The de novo `test` split above is held out from the *reward* but is still Tsuboyama data.
+FireProt is a fully independent oracle: natural proteins, aggregated across many assays
+(alanine-scan-heavy), lengths 53–448 (vs Megascale's ≤75), and — critically — the
+**homolog-free** version created in ThermoMPNN, filtered to drop any FireProt sequence with
+>25% identity to Megascale. It appears in no part of the DPO reward, so it tests whether the
+alignment *generalizes* rather than sharpens the training distribution. This is the ESM3
+paper's held-out FireProt check (App. A.1.4.4, [`docs/esm3.txt`](docs/esm3.txt)).
+
+*Data & provenance.* [`data/download_fireprot.py`](data/download_fireprot.py) pulls
+`data_all/testing/fireprot_HF.csv` directly from a **pinned commit** of the
+[ThermoMPNN](https://github.com/Kuhlman-Lab/ThermoMPNN) repo (`2b04fd3`, ~1.9 MB, no auth)
+and reshapes it into a `reward_table`-style eval table. We deliberately do **not** use the
+raw Zenodo FireProtDB dump (zenodo 8169289) — that is ThermoMPNN's *input*, before the
+homology filtering, and would silently reintroduce leakage against Megascale.
+
+```bash
+pixi run python data/download_fireprot.py          # → data/prepared/fireprot_eval.csv
+pixi run python data/download_fireprot.py --list   # just inspect the raw ThermoMPNN schema
+```
+
+Produces `data/prepared/fireprot_eval.csv`: 2,560 single-point mutants across 89 proteins
+(42 with ≥10 mutants), one row per mutant with `WT_name`, `mut_type`, `wt_seq`, `aa_seq`
+(mutant sequence), `ddG`, `position`, `pH`. **Sign convention: lower `ddG` = more stable**
+(standard ΔΔG_folding; evidenced by ThermoMPNN's own ProteinMPNN baseline negating its
+likelihood to match this column) — see the script docstring.
+
+*Run the eval.* [`align/eval_fireprot.py`](align/eval_fireprot.py) reuses `train_dpo.py`'s
+exact scoring path and scores the **aligned policy and the base model in one pass** (LoRA on
+vs peft `disable_adapter()` — same weights, so every per-protein delta is apples-to-apples).
+Because ΔΔG is only comparable within a wildtype, the metric is strictly **per-protein
+Spearman, averaged over proteins** (never one global Spearman), oriented so **positive =
+the score correctly tracks stability** (i.e. Spearman(pseudo-LL, −ddG)).
+
+```bash
+# point --adapter at the run you trained (best/ or last/); base is scored automatically
+pixi run python align/eval_fireprot.py --config align/configs/eval_fireprot.yaml
+# or ad-hoc, e.g. a quick smoke on 3 proteins:
+pixi run python align/eval_fireprot.py --adapter align/dpo_out/runs/<exp>/<run>/best \
+    --max-proteins 3 --mask-n-proteins 2
+```
+
+Two scorings: **single** (one forward pass/seq — the cheap proxy DPO trains on, all mutants)
+and **masked** (mask each residue once, L passes/seq — no self-leakage, the rigorous number;
+run on the 10 largest proteins, 40 mutants each, by default). Writes
+`align/dpo_out/fireprot_eval/<timestamp>/` (`per_protein.csv`, `summary.csv`, `summary.md`).
+
+*Result* — base ESM-C vs the `base_full` DPO run (`β=0.1, lr=1e-4, r=8`), stability-oriented
+mean per-protein Spearman:
+
+| scoring | base | aligned | Δ | aligned wins |
+|---|---|---|---|---|
+| **single** (42 proteins) | +0.188 | **+0.445** | **+0.257** | 33/42 (79%) |
+| **masked** (10 largest)  | +0.425 | **+0.517** | **+0.092** | 7/10 (70%) |
+
+The alignment generalizes to this zero-leakage set, and broadly — not an outlier artifact
+(median per-protein Δ +0.240 single / +0.083 masked). The **masked** row is the honest
+number to quote: single-pass partly reflects DPO tightening the very quantity it optimized
+(mild self-leakage), whereas masked pseudo-LL has none — and it still improves +0.092 with
+base already strong (+0.425). For comparison, the ESM3 paper reports ~0.5 Spearman via its
+embedding *probe*; our masked aligned pseudo-LL is +0.517 in the same ballpark (different
+method, so not a strict apples-to-apples). The base model coming out positive (+0.19 / +0.43,
+as expected) is the built-in sign check that the metric orientation is correct.
