@@ -8,10 +8,65 @@ provide ground-truth checks.
 
 ```
   Megascale ΔG ──▶ preference pairs (A≻B) ──▶ DPO ──▶ aligned policy
-  held-out checks (not in the reward):  FireProt ΔΔG · ESMFold pLDDT · base-model perplexity · ProteinGym
+  held-out checks (not in the reward):  FireProt ΔΔG · Swiss-Prot pseudo-perplexity · ESMFold pLDDT · ProteinGym
 ```
 
+Two questions, two kinds of check. *Did alignment work?* → FireProt ΔΔG (§5), a fully
+independent stability oracle. *Did alignment break anything else?* → Swiss-Prot
+pseudo-perplexity (§6), which asks whether a model tuned on 75-residue domains is still a
+general protein language model at 500 residues. The KL term in training only measures drift
+on the distribution DPO trained on, so it cannot answer the second question.
 
+---
+
+## Contents
+
+- [Repository layout](#repository-layout)
+- [Setup](#setup)
+- [Pipeline](#pipeline)
+  1. [Download Tsuboyama data](#1-download-tsuboyama-data-1-gb)
+  2. [Build training inputs](#2-build-training-inputs)
+  3. [Fit the reward probe](#3-fit-the-reward-probe-the-gate)
+  4. [DPO alignment](#4-dpo-alignment)
+  5. [Held-out FireProt ΔΔG evaluation](#5-held-out-fireprot-ddg-evaluation-the-cleanest-generalization-check)
+  6. [Held-out forgetting check](#6-held-out-forgetting-check-swiss-prot-pseudo-perplexity)
+- [Coding-agent conventions](#coding-agent-conventions)
+
+---
+
+## Repository layout
+
+Every script is self-documenting — full rationale, provenance, and usage examples live in
+each file's module docstring. This table is just a map to find the right one.
+
+| Path | What it is |
+|---|---|
+| **`align/`** | DPO training, evaluation, and shared scoring code |
+| [`align/train_dpo.py`](align/train_dpo.py) | Custom offline DPO loop — ESM-C + LoRA policy vs. frozen reference, pseudo-log-likelihood loss (§4) |
+| [`align/sweep_dpo.py`](align/sweep_dpo.py) | Optuna hyperparameter search (β × lr × lora_rank × batch_size) reusing `train_dpo.py` in-process |
+| [`align/scoring.py`](align/scoring.py) | Shared scoring/adapter-switching helpers used by every eval script — wraps `train_dpo.py`'s pseudo-LL functions, never reimplements them |
+| [`align/eval_base.py`](align/eval_base.py) | Base-model-only characterization — the before/after reference row for a DPO run |
+| [`align/eval_fireprot.py`](align/eval_fireprot.py) | Held-out FireProt ΔΔG generalization eval (§5) |
+| [`align/eval_pppl.py`](align/eval_pppl.py) | Held-out Swiss-Prot forgetting check (§6) |
+| `align/configs/*.yaml` | Per-run configs (train/sweep/eval); any CLI flag overrides the YAML |
+| `align/dpo_out/` | Run artifacts — checkpoints, `history.json`/`metrics.csv`, tensorboard, eval outputs (gitignored, regenerate locally) |
+| **`data/`** | Dataset download + preparation scripts |
+| [`data/download.py`](data/download.py) | Generic Zenodo dataset downloader (checksum-verified, resumable) |
+| [`data/prepare.py`](data/prepare.py) | Tsuboyama raw data → `reward_table.csv` (ΔG per sequence) + `dpo_pairs.csv` (preference pairs) |
+| [`data/foldseek_split.py`](data/foldseek_split.py) | ESM3-paper-style structural (Foldseek) train/val/test split, incl. denovo-safe variant |
+| [`data/build_dpo_pairs.py`](data/build_dpo_pairs.py) | Leakage-free DPO train/val pairs built from a WT-level split file |
+| [`data/download_fireprot.py`](data/download_fireprot.py) | Pulls the homolog-free FireProt ΔΔG set from a pinned ThermoMPNN commit (§5) |
+| [`data/download_swissprot.py`](data/download_swissprot.py) | Builds the length-stratified Swiss-Prot eval set from UniProt REST (§6) |
+| `data/prepared/` | Generated tables consumed by `align/` and `reward/` (gitignored, regenerate locally) |
+| **`reward/`** | Reward oracle |
+| [`reward/fit_probe.py`](reward/fit_probe.py) | Ridge probe on frozen ESM-C embeddings → ΔG; the gate to clear before alignment |
+| `reward/probe_out/` | Probe metrics/predictions (gitignored) |
+| **`benchmark/`** | Hardware feasibility sweep (load + fwd/bwd pass at increasing batch size) — see [`benchmark/README.md`](benchmark/README.md) |
+| **`notebooks/`** | EDA (`tsuboyama_eda.ipynb`) and DPO/eval result analysis (`dpo_results_analysis.ipynb`, `analyze_dpo.ipynb`) |
+| **`tests/`** | pytest unit tests for data-prep invariants — `pixi run pytest` (no GPU/model tests; those aren't unit-testable) |
+| **`docs/`** | Personal scratch notes + a pinned copy of the ESM3 paper text referenced above (gitignored, local-only — not shipped with the repo) |
+| `pixi.toml` / `pixi.lock` | Self-contained environment (see Setup) |
+| [`AGENTS.md`](AGENTS.md) | Conventions, invariants, and gotchas for anyone (or any agent) working in this repo |
 
 ---
 
@@ -29,7 +84,7 @@ once, then drop the prefix).
 
 ---
 
-## Running the pipeline
+## Pipeline
 
 **1. Download Tsuboyama data (~1 GB)**
 
@@ -238,11 +293,141 @@ mean per-protein Spearman:
 | **single** (42 proteins) | +0.188 | **+0.445** | **+0.257** | 33/42 (79%) |
 | **masked** (10 largest)  | +0.425 | **+0.517** | **+0.092** | 7/10 (70%) |
 
-The alignment generalizes to this zero-leakage set, and broadly — not an outlier artifact
-(median per-protein Δ +0.240 single / +0.083 masked). The **masked** row is the honest
-number to quote: single-pass partly reflects DPO tightening the very quantity it optimized
-(mild self-leakage), whereas masked pseudo-LL has none — and it still improves +0.092 with
-base already strong (+0.425). For comparison, the ESM3 paper reports ~0.5 Spearman via its
-embedding *probe*; our masked aligned pseudo-LL is +0.517 in the same ballpark (different
-method, so not a strict apples-to-apples). The base model coming out positive (+0.19 / +0.43,
-as expected) is the built-in sign check that the metric orientation is correct.
+**The alignment generalizes: +0.092 masked Spearman on a zero-leakage oracle, base already
+strong.** Not an outlier artifact (median per-protein Δ +0.240 single / +0.083 masked).
+
+<details>
+<summary>Why <strong>masked</strong> is the number to quote, and how it compares to the paper</summary>
+
+The **masked** row is the honest number to quote: single-pass partly reflects DPO tightening
+the very quantity it optimized (mild self-leakage), whereas masked pseudo-LL has none — and it
+still improves +0.092 with base already strong (+0.425). For comparison, the ESM3 paper
+reports ~0.5 Spearman via its embedding *probe*; our masked aligned pseudo-LL is +0.517 in the
+same ballpark (different method, so not a strict apples-to-apples). The base model coming out
+positive (+0.19 / +0.43, as expected) is the built-in sign check that the metric orientation is
+correct.
+
+</details>
+
+**6. Held-out forgetting check (Swiss-Prot pseudo-perplexity)**
+
+§5 answers *did alignment work*. This answers *did alignment break anything else*. Every
+other eval here — including the KL term in training — scores 31–75 residue Tsuboyama domains
+or ≤448-residue FireProt mutants, so none of them can see damage to general protein modelling
+at 500 residues. `--beta` controls drift, but KL only measures it **on the distribution DPO
+trained on**; a model can sit at a comfortable KL and still have forgotten how to model a
+full-length enzyme.
+
+So: masked **pseudo-perplexity** (mask each residue once, predict from the rest, average over
+residues — `pppl = exp(−mean log p)`) on natural Swiss-Prot enzymes, bucketed by length, base
+vs aligned. The `(0,75]` bucket is the **in-distribution control** — the length range DPO
+actually trained on. The signal is the *trend across buckets*: a delta that grows with length
+means aligning on short domains degraded long-protein modelling.
+
+*Data & provenance.* [`data/download_swissprot.py`](data/download_swissprot.py) pulls
+UniProtKB reviewed enzymes ≤512 residues (`reviewed:true AND ec:* AND length:[1 TO 512]`,
+222,178 hits at release **2026_02**). UniProt has no commit to pin the way
+[`download_fireprot.py`](data/download_fireprot.py) pins a ThermoMPNN SHA, and no way to
+request an old release over REST — so the script instead **detects drift**: it warns loudly if
+the live `X-UniProt-Release` header or result count has moved off the pinned constants, and
+records what it actually fetched in a `swissprot_eval.meta.json` sidecar so every eval run can
+state which snapshot it scored. Rows with more than one EC number, a partial EC (`3.5.-.-`),
+or a non-standard residue are dropped and counted — the residue filter matters here in a way
+it never did for Tsuboyama/FireProt, since `seq_logp` only treats cls/eos/pad as special and
+would score a selenocysteine as an ordinary residue.
+
+```bash
+pixi run python data/download_swissprot.py          # → data/prepared/swissprot_eval.csv (~15 min)
+pixi run python data/download_swissprot.py --list   # check the pins (one page, seconds)
+```
+
+Produces `data/prepared/swissprot_eval.csv`: **400 proteins, 80 per length bucket**, sampled
+from the 146,369 that survive filtering (out of 222,178 raw: 12,928 multi-EC, 35,737
+partial-EC, 794 non-standard-residue rows dropped), spanning 4,192 EC numbers — one row per
+protein with `accession`, `ec`, `aa_seq`, `length`, `length_bucket`. Alongside it,
+`swissprot_eval.meta.json` records the release and counts actually fetched.
+
+*Cost & why.* The first run pages through `/search` at 500 rows/request (~450 requests,
+~15 min) and caches **~49 MB** of gzipped TSV under `data/swissprot/`; the eval table it
+distills is ~400 proteins. Two deliberate choices behind that:
+
+- **Not the `/stream` endpoint**, which is the obvious pick and the wrong one — measured, it
+  serves this query at ~4 KB/s (≈3 h) while paginated `/search` returns 500 rows *with
+  sequences* in ~2 s. Identical data.
+- **Download all 222k to keep 400.** UniProt has no random-sampling API, and taking the first
+  N by cursor is accession-ordered — which correlates with how well-studied a protein is, and
+  so with how heavily it appears in ESM-C's pretraining. Reading the full population is what
+  makes the length-stratified sample unbiased. The raw TSV is kept (unlike FireProt's 2 MB
+  re-fetchable CSV) so re-subsampling with a different `--seed`/`--n-per-bucket` is instant.
+
+*Run the eval.* [`align/eval_pppl.py`](align/eval_pppl.py) reuses the same scoring path as
+every other eval ([`align/scoring.py`](align/scoring.py)) and scores the aligned policy and
+the base model **in one pass** (LoRA on vs `disable_adapter()`), so the per-protein deltas are
+**paired** — which is what makes the bootstrap CI on the delta meaningful.
+
+```bash
+pixi run python align/eval_pppl.py --config align/configs/eval_pppl.yaml
+pixi run python align/eval_pppl.py --adapter <run>/best --max-seqs 20 --batch-size 4  # smoke
+```
+
+Unlike every other eval config, `eval_pppl.yaml` has **no `length_norm` knob**: perplexity is
+per-residue by definition, so it's hardcoded on. Summed log-prob across a 37→512 residue range
+would just be measuring length. Cost is the design constraint — masked pppl needs `Σ Lᵢ`
+forward passes and attention is O(L²), so `batch_size` defaults to 8 (vs 16 elsewhere) and the
+download defaults to 80 proteins/bucket (~35 min for base+aligned). Writes
+`align/dpo_out/pppl_eval/<timestamp>/` (`per_sequence.csv`, `summary.csv`, `summary.md`).
+
+*Result* — base ESM-C vs the same `base_full` DPO run as §5 (`β=0.1, lr=1e-4, r=8`), masked
+pseudo-perplexity (lower = better), Δ in log space (positive = **aligned is worse**):
+
+| length bucket | n | base pppl | aligned pppl | Δ log-pppl [95% CI] | proteins worse |
+|---|---|---|---|---|---|
+| **(0, 75]** ← DPO's own range | 80 | 7.79 | 13.23 | **+0.530** [+0.401, +0.669] | 76/80 (95%) |
+| (75, 150] | 80 | 2.94 | 3.44 | +0.156 [+0.113, +0.204] | 76/80 (95%) |
+| (150, 250] | 80 | 3.03 | 3.46 | +0.132 [+0.105, +0.164] | 78/80 (98%) |
+| (250, 350] | 80 | 3.29 | 3.93 | +0.179 [+0.135, +0.232] | 79/80 (99%) |
+| (350, 512] | 80 | 3.04 | 3.60 | +0.171 [+0.133, +0.219] | 80/80 (100%) |
+| **all** | 400 | **3.70** | **4.67** | **+0.234** [+0.199, +0.271] | **389/400 (97%)** |
+
+**The alignment is not free: overall pseudo-perplexity rises 3.70 → 4.67 (×1.26), worst in the
+band DPO trained on, not at long lengths — and the KL term never saw it coming.** Every
+bucket's CI excludes zero; 97% of individual proteins get worse.
+
+<details>
+<summary>Full analysis: where the damage lands, why KL didn't catch it, and whether it's fatal</summary>
+
+**The damage is worst where DPO trained, not at long lengths.** This is the opposite of the
+hypothesis the eval was built to test. Drift does *not* grow with length — Spearman(length, Δ)
+= **−0.16**, slightly negative — while the `(0,75]` control bucket, the band the training
+domains actually live in, degrades **×1.70** (7.79 → 13.23), 3× harder than any long bucket.
+Long-protein modelling is dinged (~×1.19) but not disproportionately.
+
+**Why, and why the KL term didn't save us.** DPO optimizes the *margin* between chosen and
+rejected and is indifferent to absolute likelihood — the classic consequence is that both
+sides get less likely. The training run's own `kl_drift` (= `mean(log π − log π_ref)` on the
+**chosen** sequences, [`train_dpo.py:45`](align/train_dpo.py#L45)) shows exactly that, and it
+never once goes positive: it falls monotonically from 0 to −313 nats over the run. The
+adapter scored above is `best/` — step 1000, `kl_drift = −92.3` — i.e. *already* the
+mildest-drift checkpoint among the high-accuracy ones, and it still costs ×1.26 perplexity.
+(The `last/` checkpoint sits at −253.9 and would be worse.) So the diagnostic *did* see the
+displacement; what it can't say, being summed nats on training pairs, is whether the drift
+stays in-distribution or what it costs on real proteins. This eval answers both: it doesn't,
+and ×1.26.
+
+**But it isn't catastrophic.** 4.67 is still far below 20 — the pseudo-perplexity of a model
+that has learned nothing and guesses uniformly over the 20 standard residues. ESM-C is still a
+protein language model, just a measurably worse one. Read together with §5, the honest summary of
+this run is: **+0.092 masked FireProt Spearman, bought with ×1.26 pseudo-perplexity on natural
+proteins.** Whether that trade is worth it is a `--beta` question, and this eval is the
+counterweight that makes the sweep meaningful — reward_acc and FireProt alone will always
+prefer more drift.
+
+</details>
+
+---
+
+## Coding-agent conventions
+
+See [AGENTS.md](AGENTS.md) for the invariants (leakage guarantees, sign conventions, pinned
+data sources) and repo conventions that anyone — human or agent — should know before changing
+code here.

@@ -1,0 +1,24 @@
+# SwissProt pseudo-perplexity forgetting check for align/eval_pppl.py — masked
+# pppl per protein by length bucket, base vs aligned, with a paired bootstrap CI.
+# Prepare the data first:  pixi run python data/download_swissprot.py
+# Run:  pixi run python align/eval_pppl.py --config align/configs/eval_pppl.yaml
+# Keys are argparse *dest* names; any CLI flag overrides the value here.
+
+model: biohub/ESMC-300M
+
+# CHANGE ME to the run you want to score. Scoring base + aligned together (adapters
+# disabled = base) makes every per-protein delta paired and apples-to-apples.
+adapter: align/dpo_out/runs/base_full_20260710/20260710_082958_b0.1_lr1e-04_bs16_r8/best
+
+batch_size: 8            # masked variants per fwd pass. Attention is O(L²) and these
+                         # proteins are ~4x longer than the Tsuboyama domains the other
+                         # evals' batch_size: 16 was tuned for. Raise at your own risk.
+max_seqs: 0              # 0 = every protein in swissprot_eval.csv (~400 at the
+                         # download default). Expect tens of minutes for base+aligned.
+n_boot: 5000             # paired bootstrap resamples for the delta CI
+seed: 0
+
+# NOTE: there is deliberately no `length_norm` key here, unlike every other eval
+# config. Perplexity is per-residue by definition, so eval_pppl.py hardcodes
+# length_norm=True. Do not "fix" this to match the training run — summed log-prob
+# across a 37→512 residue range would just be measuring length.
