@@ -157,7 +157,9 @@ def main() -> None:
     ap.add_argument("--list", action="store_true",
                     help="download and print the raw schema/head, then exit")
     ap.add_argument("--keep-raw", action="store_true",
-                    help="keep the raw fireprot_HF.csv under data/fireprot/ (kept by default)")
+                    help="keep the raw fireprot_HF.csv under data/fireprot/ (deleted by "
+                         "default — it's a 1.9 MB re-fetchable download, and the prepared "
+                         "data/prepared/fireprot_eval.csv is what the evals read)")
     ap.add_argument("--out", type=Path, default=PREP_DIR / "fireprot_eval.csv")
     args = ap.parse_args()
 
