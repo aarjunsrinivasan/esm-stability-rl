@@ -1,0 +1,19 @@
+# FireProt held-out evaluation, ESMC-6B, BASE MODEL ONLY — see
+# eval_fireprot_300M.yaml for the full explanation of this 3-size comparison.
+# dtype: bf16 is required — ESMC-6B in its default fp32 dtype alone occupies
+# ~23GB and OOMs a 24GB GPU before any activations are computed.
+# Run:  pixi run python align/eval_fireprot.py --config align/configs/eval_fireprot_6B.yaml
+
+model: biohub/ESMC-6B
+dtype: bf16
+
+min_muts: 10
+max_proteins: 0
+mask_n_proteins: 10
+mask_per_protein: 40
+batch_size: 16            # forward-only; benchmark/results/report_20260720_143854.md shows
+                          # 6B forward handles batch 128 at seq_len 512 in 17.9GB (bf16) on
+                          # this GPU — 16 leaves ample headroom given masked scoring's extra
+                          # per-sequence passes
+length_norm: false
+seed: 0

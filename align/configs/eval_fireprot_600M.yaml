@@ -1,0 +1,15 @@
+# FireProt held-out evaluation, ESMC-600M, BASE MODEL ONLY — see
+# eval_fireprot_300M.yaml for the full explanation of this 3-size comparison.
+# Run:  pixi run python align/eval_fireprot.py --config align/configs/eval_fireprot_600M.yaml
+
+model: biohub/ESMC-600M
+dtype: auto
+
+min_muts: 10
+max_proteins: 0
+mask_n_proteins: 10
+mask_per_protein: 40
+batch_size: 32           # forward-only; benchmark/results/report_20260720_143854.md shows
+                          # 600M forward comfortably handles batch 128 at seq_len 512 on this GPU
+length_norm: false
+seed: 0

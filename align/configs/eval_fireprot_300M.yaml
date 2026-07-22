@@ -1,0 +1,19 @@
+# FireProt held-out evaluation, ESMC-300M, BASE MODEL ONLY — part of a 3-size
+# scale comparison (300M/600M/6B) against the ESM3 paper's App. A.1.4.4 FireProt
+# generalization check (docs/esm3.txt). No `adapter` key on purpose: this
+# characterizes the frozen base model at each scale, matching how the paper's
+# own cross-scale comparison was done (frozen representations, no fine-tuning) —
+# there is no DPO-trained adapter at this scale in this repo.
+# Prepare the data first:  pixi run python data/download_fireprot.py
+# Run:  pixi run python align/eval_fireprot.py --config align/configs/eval_fireprot_300M.yaml
+
+model: biohub/ESMC-300M
+dtype: auto
+
+min_muts: 10             # skip proteins with fewer mutants (per-protein ρ needs points)
+max_proteins: 0          # 0 = all qualifying proteins
+mask_n_proteins: 10      # also masked-score the 10 largest proteins (0 = skip masked)
+mask_per_protein: 40     # cap mutants scored masked per protein (keeps L× passes tractable)
+batch_size: 16
+length_norm: false
+seed: 0
