@@ -8,6 +8,10 @@ align/dpo_out/**
 docs/**
 .pytest_cache
 
+# benchmark results (machine-specific, regenerate locally)
+benchmark/results/**
+!benchmark/results/.gitkeep
+
 # pixi env + python caches
 .pixi/
 __pycache__/
