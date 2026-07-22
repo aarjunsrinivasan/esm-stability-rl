@@ -7,8 +7,10 @@ ESM-C pseudoperplexity to remove perplexity confounding across splits.
 
 Differences from the paper, and why:
   - pppl is scored with whatever --model you pass (default ESMC-300M, matching
-    the reward-probe gate in README) instead of ESMC-6B — 6B isn't wired up
-    in this repo. Bin edges (low 0-2 / medium 2-8 / high 8-20) are unchanged.
+    the reward-probe gate in README); pass --model biohub/ESMC-6B --dtype bf16
+    to match the paper's choice exactly (fp32, the "auto" default, doesn't fit
+    ESMC-6B alongside activations on a 24GB GPU). Bin edges (low 0-2 / medium
+    2-8 / high 8-20) are unchanged regardless of model.
   - the paper additionally subsamples the non-singleton (train) pool down to
     47 families to hit an exact pppl-balanced count; that subsampling
     algorithm isn't specified. We keep the full train pool and just report
@@ -64,6 +66,7 @@ Usage:
   python data/foldseek_split.py                                   # stage 1 only
   python data/foldseek_split.py --stratify-pppl                    # + stage 2
   python data/foldseek_split.py --stratify-pppl --model biohub/ESMC-600M
+  python data/foldseek_split.py --stratify-pppl --model biohub/ESMC-6B --dtype bf16   # paper-exact pppl model
 
 Writes four files:
   data/prepared/wt_split_foldseek.csv                    # representative, origin-agnostic (paper-exact)
@@ -222,27 +225,28 @@ def pppl_bin(pppl: float) -> str:
     return "out_of_range"
 
 
-def compute_pppl(sequences: list[str], model_id: str, batch_size: int) -> np.ndarray:
+def compute_pppl(sequences: list[str], model_id: str, batch_size: int, dtype: str = "auto") -> np.ndarray:
     import sys
     sys.path.insert(0, str(DATA_DIR.parent / "align"))
     import torch
     from transformers import AutoModelForMaskedLM, AutoTokenizer
     from train_dpo import masked_seq_logp
+    from scoring import DTYPE_MAP
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tok = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForMaskedLM.from_pretrained(model_id, dtype="auto").to(device).eval()
+    model = AutoModelForMaskedLM.from_pretrained(model_id, dtype=DTYPE_MAP[dtype]).to(device).eval()
     special_ids = {i for i in (tok.cls_token_id, tok.eos_token_id, tok.pad_token_id) if i is not None}
 
     mean_logp = masked_seq_logp(model, tok, sequences, special_ids, batch_size, length_norm=True)
     return np.exp(-mean_logp)
 
 
-def stratify_pppl(df: pd.DataFrame, model_id: str, batch_size: int, val_frac: float, seed: int) -> pd.DataFrame:
+def stratify_pppl(df: pd.DataFrame, model_id: str, batch_size: int, val_frac: float, seed: int, dtype: str = "auto") -> pd.DataFrame:
     """Bins by pppl and assigns val/test on the (shared) eval pool. Both variant
     columns get identical val/test labels — they only differ on the train side."""
-    print(f"scoring pseudoperplexity with {model_id} …")
-    pppl = compute_pppl(df.aa_seq.tolist(), model_id, batch_size)
+    print(f"scoring pseudoperplexity with {model_id} (dtype={dtype}) …")
+    pppl = compute_pppl(df.aa_seq.tolist(), model_id, batch_size, dtype)
     df = df.copy()
     df["pppl"] = pppl
     df["pppl_bin"] = df.pppl.map(pppl_bin)
@@ -267,6 +271,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stratify-pppl", action="store_true", help="run stage 2 (pppl-balanced val/test split)")
     ap.add_argument("--model", default="biohub/ESMC-300M", help="ESM-C model for pppl scoring")
+    ap.add_argument("--dtype", choices=["auto", "bf16", "fp16", "fp32"], default="auto",
+                    help="model load dtype; ESMC-6B needs bf16 (fp32 alone is ~23GB)")
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--val-frac", type=float, default=0.2, help="fraction of the eval pool assigned to val (rest -> test)")
     ap.add_argument("--seed", type=int, default=0)
@@ -292,7 +298,7 @@ def main() -> None:
     df = denovo_safe_split(df, args.seed)
 
     if args.stratify_pppl:
-        df = stratify_pppl(df, args.model, args.batch_size, args.val_frac, args.seed)
+        df = stratify_pppl(df, args.model, args.batch_size, args.val_frac, args.seed, args.dtype)
     else:
         for col in ("split_representative", "split_full"):
             df.loc[df[col] == "eval_pool", col] = "test"   # no stratification: eval pool -> test wholesale
