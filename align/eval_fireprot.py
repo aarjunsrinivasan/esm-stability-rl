@@ -24,8 +24,8 @@ base-model value so you can confirm it's positive before trusting the aligned de
 — matching eval_base.py, where positive ρ on dG also means "tracks stability".
 
 This is the FireProt analog of the de novo `test`-split Spearman in eval_base.py —
-same scoring path (seq_logp / masked_seq_logp imported from train_dpo.py, no
-duplication), so numbers are directly comparable.
+same scoring path (score_single / score_masked from scoring.py, which wrap
+train_dpo.py's seq_logp / masked_seq_logp), so numbers are directly comparable.
 
 BASE vs ALIGNED IN ONE PASS
 ───────────────────────────
@@ -51,40 +51,31 @@ from __future__ import annotations
 
 import argparse
 import json
-from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-import yaml
 from scipy.stats import spearmanr
 from tqdm.auto import tqdm
-from transformers import AutoModelForMaskedLM, AutoTokenizer
 
-from train_dpo import DEVICE, PREP, git_sha, masked_seq_logp, seq_logp
+from scoring import (
+    DEVICE,
+    PREP,
+    adapter_ctx,
+    apply_config,
+    coerce_paths,
+    git_sha,
+    load_scoring_model,
+    score_masked,
+    score_single,
+)
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 FIREPROT_CSV = PREP / "fireprot_eval.csv"
 OUT_DIR = ROOT / "align" / "dpo_out" / "fireprot_eval"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SCORING  (identical path to eval_base.py)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@torch.inference_mode()
-def score_single(model, tokenizer, seqs, special_ids, batch_size, length_norm):
-    out = []
-    for s in tqdm(range(0, len(seqs), batch_size), desc="  single", leave=False):
-        enc = tokenizer(seqs[s:s + batch_size], return_tensors="pt",
-                        padding=True).to(DEVICE)
-        lp = seq_logp(model, enc["input_ids"], enc["attention_mask"],
-                      special_ids, length_norm)
-        out.append(lp.cpu().numpy())
-    return np.concatenate(out) if out else np.array([])
 
 
 def _stab_rho(score, ddG):
@@ -97,13 +88,6 @@ def _stab_rho(score, ddG):
     if len(x) < 3 or np.std(x) == 0 or np.std(y) == 0:
         return float("nan")
     return float(spearmanr(x, y).statistic)
-
-
-def _adapter_ctx(model, aligned):
-    """aligned=True → use the LoRA policy as-is; False → disable adapters (base)."""
-    if aligned or not hasattr(model, "disable_adapter"):
-        return nullcontext()
-    return model.disable_adapter()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,7 +117,7 @@ def per_protein_eval(model, tokenizer, special_ids, special_set, args, models):
         seqs, ddG = g.aa_seq.tolist(), g.ddG.to_numpy()
 
         for name, aligned in models:
-            with _adapter_ctx(model, aligned):
+            with adapter_ctx(model, aligned):
                 single = score_single(model, tokenizer, seqs, special_ids,
                                       args.batch_size, args.length_norm)
             rows.append({"WT_name": wt, "model": name, "scoring": "single",
@@ -143,9 +127,9 @@ def per_protein_eval(model, tokenizer, special_ids, special_set, args, models):
                 m = min(args.mask_per_protein, len(seqs)) if args.mask_per_protein else len(seqs)
                 idx = rng.choice(len(seqs), size=m, replace=False)
                 sub_seqs = [seqs[i] for i in idx]
-                with _adapter_ctx(model, aligned):
-                    masked = masked_seq_logp(model, tokenizer, sub_seqs, special_set,
-                                             args.batch_size, args.length_norm)
+                with adapter_ctx(model, aligned):
+                    masked = score_masked(model, tokenizer, sub_seqs, special_set,
+                                          args.batch_size, args.length_norm)
                 rows.append({"WT_name": wt, "model": name, "scoring": "masked",
                              "n": m, "spearman": _stab_rho(masked, ddG[idx])})
     return pd.DataFrame(rows)
@@ -176,6 +160,8 @@ def build_args(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter,
                                 parents=[cfg_parser])
     p.add_argument("--model", default="biohub/ESMC-300M")
+    p.add_argument("--dtype", choices=["auto", "bf16", "fp16", "fp32"], default="auto",
+                   help="model load dtype; ESMC-6B needs bf16 (fp32 alone is ~23GB)")
     p.add_argument("--adapter", type=Path, default=None,
                    help="LoRA adapter dir (…/best or …/last). Given → score aligned AND "
                         "base (adapters disabled) on the same seqs. Omitted → base only.")
@@ -192,18 +178,11 @@ def build_args(argv=None):
     p.add_argument("--seed", type=int, default=0)
 
     if cfg_args.config:
-        assert cfg_args.config.exists(), f"missing config {cfg_args.config}"
-        cfg = yaml.safe_load(cfg_args.config.read_text()) or {}
-        known = {a.dest for a in p._actions}
-        unknown = set(cfg) - known
-        assert not unknown, f"unknown key(s) in {cfg_args.config}: {unknown}"
-        p.set_defaults(**cfg)
+        apply_config(p, cfg_args.config)
 
     args = p.parse_args(remaining)
     args.config = cfg_args.config
-    if args.adapter is not None:
-        args.adapter = Path(args.adapter)
-    return args
+    return coerce_paths(args, "adapter")
 
 
 def main(argv=None):
@@ -214,21 +193,8 @@ def main(argv=None):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    print(f"Loading base {args.model} on {DEVICE} …")
-    model = AutoModelForMaskedLM.from_pretrained(args.model, dtype="auto").to(DEVICE)
-    models = [("base", False)]
-    if args.adapter is not None:
-        from peft import PeftModel
-        assert args.adapter.exists(), f"missing adapter dir {args.adapter}"
-        print(f"Wrapping with LoRA adapter (aligned policy) → {args.adapter}")
-        model = PeftModel.from_pretrained(model, str(args.adapter)).to(DEVICE)
-        models = [("aligned", True), ("base", False)]   # base = adapters disabled, same weights
-    model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    special_ids = torch.tensor(
-        [i for i in (tokenizer.cls_token_id, tokenizer.eos_token_id,
-                     tokenizer.pad_token_id) if i is not None], device=DEVICE)
-    special_set = set(special_ids.tolist())
+    model, tokenizer, special_ids, special_set, models = load_scoring_model(
+        args.model, args.adapter, args.dtype)
 
     per_protein = per_protein_eval(model, tokenizer, special_ids, special_set, args, models)
     summ = aggregate(per_protein)

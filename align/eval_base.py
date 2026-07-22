@@ -65,61 +65,26 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-import yaml
-from scipy.stats import spearmanr
-from tqdm.auto import tqdm
-from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 # reuse the exact scoring path the training loop uses — same proxy, comparable numbers
-from train_dpo import (
+from scoring import (
     DEVICE,
     PREP,
-    REWARD_CSV,
+    apply_config,
+    coerce_paths,
     git_sha,
-    masked_seq_logp,
-    seq_logp,
+    load_scoring_model,
+    rho as _rho,
+    score_masked,
+    score_single,
 )
+from train_dpo import REWARD_CSV
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 TRAIN_PAIRS = PREP / "dpo_pairs_train.csv"
 VAL_PAIRS = PREP / "dpo_pairs_val.csv"
 OUT_DIR = ROOT / "align" / "dpo_out" / "base_eval"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SCORING
-# ─────────────────────────────────────────────────────────────────────────────
-
-@torch.inference_mode()
-def score_single(model, tokenizer, seqs, special_ids, batch_size, length_norm):
-    """Single-pass pseudo-LL for a list of sequences → (N,) numpy."""
-    out = []
-    for s in tqdm(range(0, len(seqs), batch_size), desc="  single", leave=False):
-        enc = tokenizer(seqs[s:s + batch_size], return_tensors="pt",
-                        padding=True).to(DEVICE)
-        lp = seq_logp(model, enc["input_ids"], enc["attention_mask"],
-                      special_ids, length_norm)
-        out.append(lp.cpu().numpy())
-    return np.concatenate(out) if out else np.array([])
-
-
-@torch.inference_mode()
-def score_masked(model, tokenizer, seqs, special_id_set, batch_size, length_norm):
-    """Rigorous masked pseudo-LL (L fwd passes/seq) → (N,) numpy."""
-    return masked_seq_logp(model, tokenizer, seqs, special_id_set, batch_size,
-                           length_norm)
-
-
-def _rho(x, y):
-    """Spearman over rows where both sides are finite (ΔΔG has NaNs for some rows);
-    undefined (nan) if <3 usable rows or either side is constant."""
-    x, y = np.asarray(x, float), np.asarray(y, float)
-    ok = np.isfinite(x) & np.isfinite(y)
-    x, y = x[ok], y[ok]
-    if len(x) < 3 or np.std(x) == 0 or np.std(y) == 0:
-        return float("nan")
-    return float(spearmanr(x, y).statistic)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,19 +213,12 @@ def build_args(argv=None):
     p.add_argument("--seed", type=int, default=0)
 
     if cfg_args.config:
-        assert cfg_args.config.exists(), f"missing config {cfg_args.config}"
-        cfg = yaml.safe_load(cfg_args.config.read_text()) or {}
-        known = {a.dest for a in p._actions}
-        unknown = set(cfg) - known
-        assert not unknown, f"unknown key(s) in {cfg_args.config}: {unknown} (expected one of {sorted(known)})"
-        p.set_defaults(**cfg)
+        apply_config(p, cfg_args.config)
 
     args = p.parse_args(remaining)
     args.config = cfg_args.config
     # set_defaults() bypasses type=Path for YAML-supplied values — coerce explicitly
-    if args.adapter is not None:
-        args.adapter = Path(args.adapter)
-    return args
+    return coerce_paths(args, "adapter")
 
 
 def main(argv=None):
@@ -278,19 +236,11 @@ def main(argv=None):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    print(f"Loading base {args.model} on {DEVICE} …")
-    model = AutoModelForMaskedLM.from_pretrained(args.model, dtype="auto").to(DEVICE)
-    if args.adapter is not None:
-        from peft import PeftModel
-        assert args.adapter.exists(), f"missing adapter dir {args.adapter}"
-        print(f"Wrapping with LoRA adapter (aligned policy) → {args.adapter}")
-        model = PeftModel.from_pretrained(model, str(args.adapter)).to(DEVICE)
-    model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    special_ids = torch.tensor(
-        [i for i in (tokenizer.cls_token_id, tokenizer.eos_token_id,
-                     tokenizer.pad_token_id) if i is not None], device=DEVICE)
-    special_set = set(special_ids.tolist())
+    # this script characterizes ONE model per run (base, or aligned via --adapter), so
+    # the base/aligned pair `load_scoring_model` offers is discarded — the adapter, if
+    # given, just stays on for every call.
+    model, tokenizer, special_ids, special_set, _ = load_scoring_model(
+        args.model, args.adapter)
 
     rank_df = ranking_eval(model, tokenizer, special_ids, special_set, args)
     pair_df = None if args.no_pairs else pair_eval(model, tokenizer, special_ids, special_set, args)
