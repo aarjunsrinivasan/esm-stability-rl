@@ -1,0 +1,13 @@
+# Megascale ΔG ridge-probe, ESMC-600M — see fit_probe_300M.yaml for the full
+# explanation of this 3-size comparison and the split-file prerequisite.
+# Run:  pixi run python reward/fit_probe.py --config reward/configs/fit_probe_600M.yaml
+
+model: biohub/ESMC-600M
+dtype: auto
+layer: -2
+split_file: data/prepared/wt_split_foldseek.csv
+n_train: 0
+n_eval: 0
+batch_size: 64           # forward-only; benchmark/results/report_20260720_143854.md shows
+                          # 600M forward comfortably handles batch 128 at seq_len 512
+seed: 0

@@ -1,0 +1,22 @@
+# Megascale ΔG ridge-probe, ESMC-300M — part of a 3-size scale comparison
+# (300M/600M/6B) against the ESM3 paper's App. A.1.4.4 stability-prediction
+# eval (docs/esm3.txt). split_file points at the paper-style structural +
+# pseudoperplexity split (data/foldseek_split.py --stratify-pppl), not the
+# simpler natural-vs-de-novo default — this is what makes the ridge penalty
+# get selected on val Spearman instead of RidgeCV's internal k-fold CV (see
+# module docstring). n_train/n_eval: 0 = use every row in the split's families
+# (the split file already fixes which families are in play; no further
+# subsampling needed).
+# Prepare the split first:
+#   pixi run python data/foldseek_split.py --stratify-pppl --model biohub/ESMC-6B --dtype bf16
+# Run:
+#   pixi run python reward/fit_probe.py --config reward/configs/fit_probe_300M.yaml
+
+model: biohub/ESMC-300M
+dtype: auto
+layer: -2
+split_file: data/prepared/wt_split_foldseek.csv
+n_train: 0
+n_eval: 0
+batch_size: 64
+seed: 0
