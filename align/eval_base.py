@@ -74,9 +74,11 @@ from scoring import (
     coerce_paths,
     git_sha,
     load_scoring_model,
-    rho as _rho,
     score_masked,
     score_single,
+)
+from scoring import (
+    rho as _rho,
 )
 from train_dpo import REWARD_CSV
 

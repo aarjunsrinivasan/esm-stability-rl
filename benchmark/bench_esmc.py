@@ -393,11 +393,13 @@ def write_report(results, args, gpu_name, gpu_total_gb, backward_mode, ts, halte
     lines.append(f"- GPU: **{gpu_name}** ({gpu_total_gb:.1f} GB)")
     lines.append(f"- dtype: `{args.dtype}`  |  backward mode: `{backward_mode}`"
                  + (f" (r={args.lora_r}, alpha={args.lora_alpha})" if backward_mode == "lora" else ""))
-    lines.append(f"- batch search range: [{args.batch_min}, {args.batch_max}] (doubling + binary-search refine)")
+    lines.append(f"- batch search range: [{args.batch_min}, {args.batch_max}] "
+                 f"(doubling + binary-search refine)")
     if halted:
         lines.append(f"- **Run halted early:** {halt_reason}")
     lines.append("")
-    lines.append("| model | mode | seq_len | status | max batch size | peak mem (GB) | latency (s) | throughput (seq/s) |")
+    lines.append("| model | mode | seq_len | status | max batch size | peak mem (GB) "
+                 "| latency (s) | throughput (seq/s) |")
     lines.append("|---|---|---|---|---|---|---|---|")
     for r in results:
         lines.append(

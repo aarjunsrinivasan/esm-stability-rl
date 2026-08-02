@@ -120,7 +120,7 @@ class PairDataset(Dataset):
 
 def make_collate(tokenizer):
     def collate(batch):
-        chosen, rejected, idx = zip(*batch)
+        chosen, rejected, idx = zip(*batch, strict=True)
         # tokenize chosen+rejected together so they share one padded tensor
         enc = tokenizer(list(chosen) + list(rejected), return_tensors="pt",
                         padding=True)
@@ -272,7 +272,7 @@ def dpo_terms(pol_c, pol_r, ref_c, ref_r, beta):
 def evaluate(model, loader, ref_c_all, ref_r_all, special_ids, beta, length_norm):
     model.eval()
     losses, margins, drifts, correct, n = [], [], [], 0, 0
-    for bi, (ids, amsk, nb, _) in enumerate(loader):
+    for _bi, (ids, amsk, nb, _) in enumerate(loader):
         pol = seq_logp(model, ids.to(DEVICE), amsk.to(DEVICE), special_ids, length_norm)
         pol_c, pol_r = split_pair(pol, nb)
         rc = ref_c_all[n:n + nb].to(DEVICE); rr = ref_r_all[n:n + nb].to(DEVICE)
@@ -406,7 +406,8 @@ def build_args(argv=None) -> argparse.Namespace:
         cfg = yaml.safe_load(cfg_args.config.read_text()) or {}
         known = {a.dest for a in p._actions}
         unknown = set(cfg) - known
-        assert not unknown, f"unknown key(s) in {cfg_args.config}: {unknown} (expected one of {sorted(known)})"
+        assert not unknown, (f"unknown key(s) in {cfg_args.config}: {unknown} "
+                             f"(expected one of {sorted(known)})")
         p.set_defaults(**cfg)
 
     args = p.parse_args(remaining)

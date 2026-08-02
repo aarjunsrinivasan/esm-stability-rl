@@ -77,6 +77,11 @@ ROOT = HERE.parent
 FIREPROT_CSV = PREP / "fireprot_eval.csv"
 OUT_DIR = ROOT / "align" / "dpo_out" / "fireprot_eval"
 
+# The base model's sign is the built-in check that the metric is oriented correctly;
+# a negative base ρ means the data or the sign convention is wrong, not the model.
+_SIGN_OK = "positive ✓ expected — base pseudo-LL already tracks stability"
+_SIGN_BAD = "NEGATIVE ⚠ unexpected — base pseudo-LL should track stability; check data/sign"
+
 
 def _stab_rho(score, ddG):
     """Stability-oriented Spearman: corr(score, −ddG), so positive = score tracks
@@ -215,7 +220,7 @@ def main(argv=None):
     if len(base_single):
         ms = base_single.mean_spearman.iloc[0]
         sign_note = (f"\nbase single-pass mean ρ (stability-oriented, score vs −ddG) = {ms:+.4f} "
-                     f"({'positive ✓ expected — base pseudo-LL already tracks stability' if ms > 0 else 'NEGATIVE ⚠ unexpected — base pseudo-LL should track stability; check data/sign'})")
+                     f"({_SIGN_OK if ms > 0 else _SIGN_BAD})")
 
     lines = [f"# FireProt held-out eval — {args.model}"
              + (f"  + LoRA {args.adapter}" if args.adapter is not None else " (base only)"),

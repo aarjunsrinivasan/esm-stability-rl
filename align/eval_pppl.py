@@ -106,7 +106,7 @@ def score_all(model, tokenizer, special_set, df, models, args):
     """
     out = []
     for name, aligned in models:
-        for bucket, g in tqdm(list(df.groupby("length_bucket", sort=False)),
+        for _bucket, g in tqdm(list(df.groupby("length_bucket", sort=False)),
                               desc=f"{name}", unit="bucket"):
             with adapter_ctx(model, aligned):
                 # length_norm=True is mandatory — see module docstring.

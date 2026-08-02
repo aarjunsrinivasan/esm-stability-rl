@@ -144,14 +144,14 @@ def get_embeddings(
     if use_cache and cache.exists():
         print(f"Cache hit: {cache.name}")
         z = np.load(cache, allow_pickle=True)
-        emb_by_seq = dict(zip(z["seqs"], z["emb"]))
+        emb_by_seq = dict(zip(z["seqs"], z["emb"], strict=True))
     else:
         print(f"Embedding {len(uniq)} unique sequences "
               f"(of {len(sequences)} total) …")
         emb = embed_sequences(uniq, model_id, layer, batch_size, dtype)
         np.savez(cache, seqs=np.array(uniq, dtype=object), emb=emb)
         print(f"Cached → {cache.name}")
-        emb_by_seq = dict(zip(uniq, emb))
+        emb_by_seq = dict(zip(uniq, emb, strict=True))
 
     return np.stack([emb_by_seq[s] for s in sequences])
 

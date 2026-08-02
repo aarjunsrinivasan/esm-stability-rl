@@ -17,9 +17,9 @@ align/train_dpo.py --heldout-eval (all 148 domains, regardless of which split fi
 you pick here — that guarantee only matters for train/val).
 
 Usage:
-  python data/foldseek_split.py --stratify-pppl                                  # prerequisite
-  python data/build_dpo_pairs.py                                                  # denovo-safe, full variant (recommended)
-  python data/build_dpo_pairs.py --split-file wt_split_foldseek_denovo_safe.csv   # paper-exact, smaller train
+  python data/foldseek_split.py --stratify-pppl                                 # prerequisite
+  python data/build_dpo_pairs.py                                                # denovo-safe, full (default)
+  python data/build_dpo_pairs.py --split-file wt_split_foldseek_denovo_safe.csv # paper-exact, smaller train
 
 Then in align/train_dpo.py:
   python align/train_dpo.py --train-pairs data/prepared/dpo_pairs_train.csv \\
@@ -75,7 +75,8 @@ def main() -> None:
         pairs = sample_preference_pairs(pool, args.margin, args.max_pairs_per_wt, args.seed)
         out_path = OUT / f"dpo_pairs_{name}.csv"
         pairs.to_csv(out_path, index=False)
-        print(f"dpo_pairs_{name}: {len(pairs):,} pairs across {pairs.WT_name.nunique()} domains  →  {out_path}")
+        print(f"dpo_pairs_{name}: {len(pairs):,} pairs across "
+              f"{pairs.WT_name.nunique()} domains  →  {out_path}")
 
 
 if __name__ == "__main__":

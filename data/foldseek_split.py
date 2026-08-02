@@ -100,7 +100,8 @@ PPPL_BINS     = [(0.0, 2.0, "low"), (2.0, 8.0, "medium"), (8.0, 20.0, "high")]
 def extract_pdbs() -> None:
     if PDB_DIR.exists() and any(PDB_DIR.iterdir()):
         return
-    assert ZIP.exists(), f"missing {ZIP} — run: python data/download.py --dataset tsuboyama --match AlphaFold_model_PDBs"
+    assert ZIP.exists(), (f"missing {ZIP} — run: python data/download.py "
+                          f"--dataset tsuboyama --match AlphaFold_model_PDBs")
     PDB_DIR.mkdir(parents=True, exist_ok=True)
     print(f"extracting {ZIP.name} -> {PDB_DIR} …")
     with zipfile.ZipFile(ZIP) as zf:
@@ -156,7 +157,8 @@ def structural_split(df: pd.DataFrame, seed: int) -> pd.DataFrame:
     wt_names = df.WT_name.tolist()
     stem_of, unresolved = resolve_structure_stems(wt_names)
     if unresolved:
-        print(f"  WARNING: {len(unresolved)} WT_name(s) have no matching structure, excluding: {unresolved[:10]}{' …' if len(unresolved) > 10 else ''}")
+        print(f"  WARNING: {len(unresolved)} WT_name(s) have no matching structure, "
+              f"excluding: {unresolved[:10]}{' …' if len(unresolved) > 10 else ''}")
 
     tsv = run_foldseek(RAW / "foldseek_work", COV_THRESHOLD)
     rep_of_stem = parse_cluster_tsv(tsv)
@@ -173,7 +175,7 @@ def structural_split(df: pd.DataFrame, seed: int) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     split_representative = pd.Series("excluded", index=df.index)
     split_full            = pd.Series("train", index=df.index)
-    for cluster_rep, g in df.groupby("foldseek_cluster"):
+    for _cluster_rep, g in df.groupby("foldseek_cluster"):
         if g.WT_name.nunique() == 1:
             split_representative.loc[g.index] = "eval_pool"   # singleton -> val/test candidate
             split_full.loc[g.index]           = "eval_pool"
@@ -203,7 +205,7 @@ def denovo_safe_split(df: pd.DataFrame, seed: int) -> pd.DataFrame:
 
     rng = np.random.default_rng(seed)
     pure_natural = df[(df.origin == "natural") & ~cluster_has_denovo]
-    for cluster_rep, g in pure_natural.groupby("foldseek_cluster"):
+    for _cluster_rep, g in pure_natural.groupby("foldseek_cluster"):
         if g.WT_name.nunique() == 1:
             split_representative.loc[g.index] = "val"
             split_full.loc[g.index]           = "val"
@@ -230,8 +232,9 @@ def compute_pppl(sequences: list[str], model_id: str, batch_size: int, dtype: st
     sys.path.insert(0, str(DATA_DIR.parent / "align"))
     import torch
     from transformers import AutoModelForMaskedLM, AutoTokenizer
-    from train_dpo import masked_seq_logp
+
     from scoring import DTYPE_MAP
+    from train_dpo import masked_seq_logp
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     tok = AutoTokenizer.from_pretrained(model_id)
@@ -242,7 +245,8 @@ def compute_pppl(sequences: list[str], model_id: str, batch_size: int, dtype: st
     return np.exp(-mean_logp)
 
 
-def stratify_pppl(df: pd.DataFrame, model_id: str, batch_size: int, val_frac: float, seed: int, dtype: str = "auto") -> pd.DataFrame:
+def stratify_pppl(df: pd.DataFrame, model_id: str, batch_size: int, val_frac: float,
+                  seed: int, dtype: str = "auto") -> pd.DataFrame:
     """Bins by pppl and assigns val/test on the (shared) eval pool. Both variant
     columns get identical val/test labels — they only differ on the train side."""
     print(f"scoring pseudoperplexity with {model_id} (dtype={dtype}) …")
@@ -274,11 +278,13 @@ def main() -> None:
     ap.add_argument("--dtype", choices=["auto", "bf16", "fp16", "fp32"], default="auto",
                     help="model load dtype; ESMC-6B needs bf16 (fp32 alone is ~23GB)")
     ap.add_argument("--batch-size", type=int, default=64)
-    ap.add_argument("--val-frac", type=float, default=0.2, help="fraction of the eval pool assigned to val (rest -> test)")
+    ap.add_argument("--val-frac", type=float, default=0.2,
+                    help="fraction of the eval pool assigned to val (rest -> test)")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    assert CSV.exists(), f"missing {CSV} — run: python data/download.py --dataset tsuboyama --match Processed_K50_dG"
+    assert CSV.exists(), (f"missing {CSV} — run: python data/download.py "
+                          f"--dataset tsuboyama --match Processed_K50_dG")
 
     print("loading domain table …")
     raw = pd.read_csv(CSV, usecols=["WT_name", "WT_cluster", "mut_type", "aa_seq"], low_memory=False)
@@ -309,10 +315,14 @@ def main() -> None:
         base_cols += ["pppl", "pppl_bin"]
 
     for variant, col, fname in [
-        ("representative",             "split_representative",             "wt_split_foldseek.csv"),
-        ("full",                       "split_full",                       "wt_split_foldseek_full.csv"),
-        ("representative, denovo-safe", "split_representative_denovo_safe", "wt_split_foldseek_denovo_safe.csv"),
-        ("full, denovo-safe",           "split_full_denovo_safe",           "wt_split_foldseek_full_denovo_safe.csv"),
+        ("representative", "split_representative",
+         "wt_split_foldseek.csv"),
+        ("full", "split_full",
+         "wt_split_foldseek_full.csv"),
+        ("representative, denovo-safe", "split_representative_denovo_safe",
+         "wt_split_foldseek_denovo_safe.csv"),
+        ("full, denovo-safe", "split_full_denovo_safe",
+         "wt_split_foldseek_full_denovo_safe.csv"),
     ]:
         out_path = OUT / fname
         out_df = df[base_cols].copy()

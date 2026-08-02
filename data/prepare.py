@@ -64,6 +64,7 @@ def sample_preference_pairs(df, margin: float, max_pairs_per_wt: int, seed: int)
 def prepare_tsuboyama() -> None:
     """Tsuboyama 2023 mega-scale stability → reward table, DPO pairs."""
     import warnings
+
     import numpy as np
     import pandas as pd
 
@@ -73,7 +74,8 @@ def prepare_tsuboyama() -> None:
     OUT = DATA_DIR / "prepared"
     CSV = RAW / "Tsuboyama2023_Dataset2_Dataset3_20230416.csv"
 
-    assert CSV.exists(), f"missing {CSV} — run: python data/download.py --dataset tsuboyama --match Processed_K50_dG"
+    assert CSV.exists(), (f"missing {CSV} — run: python data/download.py "
+                          f"--dataset tsuboyama --match Processed_K50_dG")
 
     USECOLS = ["name", "aa_seq", "mut_type", "WT_name", "WT_cluster",
                "dG_ML", "ddG_ML", "Stabilizing_mut"]
