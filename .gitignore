@@ -15,6 +15,7 @@ benchmark/results/**
 # pixi env + python caches
 .pixi/
 __pycache__/
+.ruff_cache/
 *.pyc
 .ipynb_checkpoints/
 .DS_Store
