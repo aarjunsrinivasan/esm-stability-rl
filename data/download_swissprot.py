@@ -71,6 +71,13 @@ USAGE (from rl_esm/)
 The first run pages through ~450 requests (~15 min) and caches the raw TSV under
 data/swissprot/; re-runs with a different --seed / --n-per-bucket hit that cache
 and are instant. --no-cache forces a re-download.
+
+We download all ~222k rows to keep ~400 on purpose. UniProt has no random-sampling
+API, and taking the first N by cursor is accession-ordered — which correlates with
+how long/well-studied an entry is, and so with how heavily it appears in ESM-C's
+pretraining. Reading the full population is what makes the length-stratified sample
+unbiased. The raw TSV is kept (unlike download_fireprot.py's small re-fetchable CSV)
+so re-subsampling is instant.
 """
 from __future__ import annotations
 
