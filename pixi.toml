@@ -10,6 +10,7 @@ platforms = ["linux-64", "osx-arm64"]
 python = "3.12.*"
 pip = "*"
 foldseek = "*"                 # structural clustering for the ESM3-style stability split (data/foldseek_split.py)
+ruff = "*"                     # linter (config in ruff.toml); lint only, no formatter
 
 [pypi-dependencies]
 torch = ">=2.6,<3"             # SDPA FlashAttention-2 backend on Ampere+ (bf16/fp16)
@@ -31,4 +32,9 @@ tensorboard = "*"              # align/dpo_out/runs/*/tensorboard
 optuna = ">=4.0"                # align/sweep_dpo.py hyperparameter search
 pytest = "*"                    # lightweight unit tests for data prep invariants
 
-# No [tasks] — run scripts explicitly with `pixi run python <script>` (see README).
+# Pipeline scripts are run explicitly (`pixi run python <script>`, see README) —
+# these tasks are just the repo-wide checks.
+[tasks]
+test = "pytest"
+lint = "ruff check ."
+fix = "ruff check --fix ."
